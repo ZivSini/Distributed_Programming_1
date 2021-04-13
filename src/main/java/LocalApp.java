@@ -1,5 +1,7 @@
 import org.json.simple.JSONObject;
+import org.mortbay.util.ajax.JSON;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -9,6 +11,7 @@ import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
+import java.io.*;
 import java.nio.file.Paths;
 import java.util.Date;
 import java.util.List;
@@ -19,6 +22,7 @@ public class LocalApp {
     private List<String> inputPaths;
     private List<String> outputPaths;
     private int n;
+    private boolean terminate;
     private String name;
     private String bucketName;
     private String queueName;
@@ -27,12 +31,15 @@ public class LocalApp {
     private SqsClient sqs;
     private String local2managerURL;
     private String manager2localURL;
+    private Boolean[] received;
+    private int receivedCounter;
 
     // Constructor
-    public LocalApp(List<String> inputPaths, List<String> outputPaths, int n){
+    public LocalApp(List<String> inputPaths, List<String> outputPaths, int n, boolean terminate){
         this.inputPaths = inputPaths;
         this.outputPaths = outputPaths;
         this.n = n;
+        this.terminate = terminate;
         this.name = "myapp" + new Date().getTime();
         this.bucketName = "bucket-" +name;
         this.queueName = "manager2local-" +name;
@@ -42,18 +49,25 @@ public class LocalApp {
                 .build();
         this.sqs = SqsClient.create();
         this.manager2localURL = createQueue();
-
+        this.received = new Boolean[inputPaths.size()];
+        this.receivedCounter = 0;
     }
 
     // Methods
     public void runApp(){
-      System.out.println(getManager());
-      this.local2managerURL = getLocal2managerQueue();
 
-      System.out.println(uploadFilesToS3());
+        String managerID = getManager();
+        System.out.println("Connected successfully to manager " +managerID);
 
+        this.local2managerURL = getLocal2managerQueue();
+
+      uploadFilesToS3();
       sendURLMessages2Manager();
-//      deleteBucket();
+      String msg = readMessageFromManager();
+
+      parseMessageFromManager(msg);
+
+      //tearDown();
     }
 
 
@@ -123,15 +137,14 @@ public class LocalApp {
             System.exit(1);
         }
 
+        System.out.println("Created successfully manager " +instanceId);
         return instanceId;
     }
 
-    private String uploadFilesToS3(){
-
-        String bucketName = this.bucketName;
+    private void uploadFilesToS3(){
 
         CreateBucketRequest bucketRequest = CreateBucketRequest.builder()
-                .bucket(bucketName)
+                .bucket(this.bucketName)
                 .createBucketConfiguration(
                         CreateBucketConfiguration.builder()
                                 .build())
@@ -151,8 +164,7 @@ public class LocalApp {
             PutObjectResponse response = s3.putObject(objectRequest, Paths.get(inputPaths.get(i)));
         }
 
-
-        return bucketName;
+        System.out.println("Uploaded the input files to S3 successfully to bucket " +this.bucketName);
     }
 
     private void deleteBucket(){
@@ -238,6 +250,7 @@ public class LocalApp {
         return output;
     }
 
+    // Message format: <bucket> <key> <manager2local sqs URL> <n>
     private void sendURLMessages2Manager(){
         try {
             ListObjectsRequest listObjects = ListObjectsRequest
@@ -251,7 +264,7 @@ public class LocalApp {
             for (S3Object myValue : objects) {
                 sqs.sendMessage(SendMessageRequest.builder()
                         .queueUrl(local2managerURL)
-                        .messageBody(bucketName +" " +myValue.key() +" " +manager2localURL)
+                        .messageBody(bucketName +" " +myValue.key() +" " +manager2localURL + " " +n)
                         .build());
             }
 
@@ -264,8 +277,63 @@ public class LocalApp {
 
     }
 
+    // TODO: parse to HTML and save in output files
+    private void parseMessageFromManager(String msg){
+        String[] tmp = msg.split(" ");
+        String summaryName = tmp[0];
+        int index = Integer.parseInt(tmp[1]);
 
-    private void parseMessageFromManager(JSONObject json){
+//        check if we didn't receive this message before
+        if(received[index]) return;
+
+        received[index] = true;
+        receivedCounter++;
+
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(summaryName)
+                .build();
+
+        ResponseInputStream<GetObjectResponse> response = s3.getObject(getObjectRequest);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(response));
+
+        FileWriter file = null;
+        try {
+            file = new FileWriter("tmp" + index);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                file.write(line);
+                file.flush();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        createHTML("tmp" + index, outputPaths.get(index));
+    }
+
+//    TODO: learn how to create html
+    private void createHTML(String fileName, String outputFileName) {
 
     }
+
+    private String readMessageFromManager() {
+        String output = null;
+
+        try{
+            ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
+                    .queueUrl(manager2localURL)
+                    .maxNumberOfMessages(1)
+                    .build();
+            List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
+            output = messages.get(0).body();
+        } catch (SqsException e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
+            System.exit(1);
+        }
+        return output;
+    }
+
+    //TODO: create tearDown method
 }

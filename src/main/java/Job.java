@@ -18,12 +18,13 @@ public class Job {
     private String objectKey;
     private String manager2local;
     private List<Review> reviews;
+    private int n;
     private int resultCounter;
 
 
     /*
     Constructor. Takes the msg from the local app, and parses it.
-    Message format: <bucket name> <object key> <manager2local SQS URL>
+    Message format: <bucket> <key> <manager2local sqs URL> <n>
      */
     public Job(String msg, S3Client s3){
         String[] arr = msg.split(" ");
@@ -32,6 +33,8 @@ public class Job {
         this.bucketName = arr[0];
         this.objectKey = arr[1];
         this.manager2local = arr[2];
+        this.n = Integer.parseInt(arr[3]);
+
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucketName)
@@ -104,4 +107,11 @@ public class Job {
         return manager2local;
     }
 
+    public int getN() {
+        return n;
+    }
+
+    public int getWorkersN(){
+        return reviews.size() / n;
+    }
 }
