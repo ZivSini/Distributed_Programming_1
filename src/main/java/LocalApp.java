@@ -1,3 +1,4 @@
+import org.json.simple.JSONObject;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
@@ -238,7 +239,6 @@ public class LocalApp {
     }
 
     private void sendURLMessages2Manager(){
-
         try {
             ListObjectsRequest listObjects = ListObjectsRequest
                     .builder()
@@ -251,7 +251,7 @@ public class LocalApp {
             for (S3Object myValue : objects) {
                 sqs.sendMessage(SendMessageRequest.builder()
                         .queueUrl(local2managerURL)
-                        .messageBody("https://" +bucketName +".s3.amazonaws.com/" +myValue.key() +" " +manager2localURL)
+                        .messageBody(bucketName +" " +myValue.key() +" " +manager2localURL)
                         .build());
             }
 
@@ -261,6 +261,11 @@ public class LocalApp {
         }
 
 
+
+    }
+
+
+    private void parseMessageFromManager(JSONObject json){
 
     }
 }
