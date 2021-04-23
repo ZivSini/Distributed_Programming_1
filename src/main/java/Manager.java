@@ -1,5 +1,7 @@
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -13,33 +15,56 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 
 public class Manager {
 
-    private static Ec2Client ec2 = Ec2Client.create();
-    private static S3Client s3 = S3Client.builder()
-            .region(Region.US_EAST_1)
-            .build();
-    private static SqsClient sqs = SqsClient.create();
-    private static String local2manager = createQueue("local2manager");
-    private static String workers2manager = createQueue("workers2manager");
-    private static String manager2workers = createQueue("manager2workers");
-    private static HashMap<String, Job> jobs = new HashMap<>();
-    private static List<String> workers = new ArrayList<>();
+    private Ec2Client ec2;
+    private S3Client s3;
+    private SqsClient sqs;
+    private String local2manager;
+    private String workers2manager;
+    private String manager2workers;
+    private HashMap<String, Job> jobs;
+    private List<String> workers;
+    private JSONParser parser;
 
     public static void main(String[] args){
 
+        System.out.println("Running manager Main");
+        Manager manager = new Manager();
+        manager.runManager();
+    }
+
+    public Manager(){
+        System.out.println("Creating new manager");
+
+        ec2 = Ec2Client.create();
+        s3 = S3Client.builder()
+                .region(Region.US_EAST_1)
+                .build();
+        sqs = SqsClient.create();
+        local2manager = createQueue("local2manager");
+        workers2manager = createQueue("workers2manager");
+        manager2workers = createQueue("manager2workers");
+        jobs = new HashMap<>();
+        workers = new ArrayList<>();
+        parser = new JSONParser();
+
+        System.out.println("Created manager successfully");
+    }
+
+    public void runManager(){
         new Thread(() -> {
+            System.out.println("Listener thread created");
             while (true)
                 readMessageFromWorkers();
         }).start();
 
         while(true){
+            System.out.println("Listening to local apps");
             Job job = readMessageFromLocalApps();
 
             if(job.getWorkersN() > workers.size()){
@@ -49,10 +74,9 @@ public class Manager {
             sendTasksToWorkers(job);
             // TODO: should we kill workers before terminate?
         }
-
     }
 
-    private static String createQueue(String queueName){
+    private String createQueue(String queueName){
         CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
                 .queueName(queueName)
                 .build();
@@ -66,7 +90,7 @@ public class Manager {
     }
 
     // Message format: <bucket> <key> <manager2local sqs URL> <n>
-    private static Job readMessageFromLocalApps(){
+    private Job readMessageFromLocalApps(){
         Job output = null;
 
         try{
@@ -74,17 +98,31 @@ public class Manager {
                     .queueUrl(local2manager)
                     .maxNumberOfMessages(1)
                     .build();
+
             List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
+
+            // Busy wait for new message
+            while(messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
+
+            // TODO: delete
+            System.out.println("Received a message from a local app!");
+            System.out.println(messages.get(0).body());
+
             output = new Job(messages.get(0).body() , s3);
-            // TODO: deal with number of workers (job.getN)
-    } catch (SqsException e) {
-        System.err.println(e.awsErrorDetails().errorMessage());
-        System.exit(1);
-    }
+
+            DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
+                    .queueUrl(local2manager)
+                    .receiptHandle(messages.get(0).receiptHandle())
+                    .build();
+            sqs.deleteMessage(deleteMessageRequest);
+        } catch (SqsException e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
+            System.exit(1);
+        }
         return output;
     }
 
-    private static void readMessageFromWorkers(){
+    private void readMessageFromWorkers(){
 
         try{
             ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
@@ -92,19 +130,43 @@ public class Manager {
                     .maxNumberOfMessages(1)
                     .build();
             List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
-            String[] msg = messages.get(0).body().split(" ");
 
-            Job job = jobs.get(msg[0]);
-            int index = Integer.parseInt(msg[1]);
-            int sentiment = Integer.parseInt(msg[2]);
-            List<String> entities = Arrays.asList(msg).subList(3, msg.length);
+            // Busy wait for a new message
+            while(messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
+
+            System.out.println("New message received");
+
+            JSONObject msg = (JSONObject) parser.parse(messages.get(0).body());
+
+            DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
+                    .queueUrl(workers2manager)
+                    .receiptHandle(messages.get(0).receiptHandle())
+                    .build();
+            sqs.deleteMessage(deleteMessageRequest);
+
+
+
+            Job job = jobs.get(msg.get("bucketKey").toString());
+            int index = Integer.parseInt(msg.get("index").toString());
+            int sentiment = Integer.parseInt(msg.get("sentiment").toString());
+
+            List<String> entities = new ArrayList();
+            JSONArray jArray = (JSONArray) msg.get(0);
+
+            if (jArray != null)
+                for (int i=0 ; i<jArray.size() ; i++) entities.add(jArray.get(i).toString());
 
             job.addResult(entities, sentiment, index);
-            if(job.isDone())
-              summarizeAndSend2Local(job);
 
-        } catch (SqsException e) {
-            System.err.println(e.awsErrorDetails().errorMessage());
+
+
+
+            if(job.isDone())
+                System.out.println("Job is Done");
+                summarizeAndSend2Local(job);
+
+        } catch (SqsException | ParseException e) {
+            System.err.println(e);
             System.exit(1);
         }
     }
@@ -114,7 +176,7 @@ public class Manager {
     uploads the json to s3,
     sends the local app message in s3: <key of summary in localApp s3 bucket> <file number>
      */
-    private static void summarizeAndSend2Local(Job job) {
+    private void summarizeAndSend2Local(Job job) {
         JSONObject mainJson = new JSONObject();
         mainJson.put("key", job.getObjectKey());
 
@@ -154,13 +216,15 @@ public class Manager {
                 .queueUrl(job.getManager2local())
                 .messageBody("summary_"+job.getObjectKey() + ".json " +num)
                 .build());
+
+        System.out.println("Job is summarized and sent to local app");
     }
 
     /*
     Sends tasks from job to workers queue.
     message format: <bucket/key> <index> <review text>
      */
-    private static void sendTasksToWorkers(Job job){
+    private void sendTasksToWorkers(Job job){
         for(int i=0 ; i<job.getReviews().size() ; i++){
             sqs.sendMessage(SendMessageRequest.builder()
                     .queueUrl(manager2workers)
@@ -169,61 +233,81 @@ public class Manager {
         }
     }
 
-    public static String getLocal2manager() {
+    public  String getLocal2manager() {
         return local2manager;
     }
 
     /*
     Creates k new worker instances and updates the workers list
      */
-    private static void createKWorkers(int k){
+    private void createKWorkers(int k){
+        if(workers.size() < 18) {
 
-        Tag tag = Tag.builder()
-                .key("name")
-                .value("worker")
-                .build();
+            // Number of workers can't be greater then 18 (AWS account restrictions)
+            int workersToCreate = k + workers.size() > 18 ? 18 -workers.size() : k;
 
-        RunInstancesRequest runRequest = RunInstancesRequest.builder()
-                .instanceType(InstanceType.T2_MICRO)
-                .imageId(Utils.amiID)
-                .maxCount(k)
-                .minCount(k)
-                .keyName("yonatan_ziv_key")
-
-//                .userData(Base64.getEncoder().encodeToString(/*your USER DATA script string*/.getBytes()))
-                .build();
-
-        RunInstancesResponse response = ec2.runInstances(runRequest);
-
-        for(Instance instance : response.instances()) {
-            String instanceId = instance.instanceId();
-            workers.add(instanceId);
-
-
-            CreateTagsRequest tagRequest = CreateTagsRequest.builder()
-                    .resources(instanceId)
-                    .tags(tag)
+            Tag tag = Tag.builder()
+                    .key("name")
+                    .value("worker")
                     .build();
 
+            String userData = "#!/bin/bash" + "\n"
+                    + "wget https://ass1yonatanziv.s3.amazonaws.com/Worker/ManagerApp.jar" + "\n"
+                    + "java -jar ManagerApp.jar" + "\n";
+            String base64UserData = null;
+
             try {
-                ec2.createTags(tagRequest);
-                System.out.printf(
-                        "Successfully started EC2 Instance %s based on AMI %s",
-                        instanceId, Utils.amiID);
-            } catch (Ec2Exception e) {
-                System.err.println(e.awsErrorDetails().errorMessage());
-                System.exit(1);
+                base64UserData = new String(Base64.getEncoder().encode(userData.getBytes("UTF-8")), "UTF-8");
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            }
+
+
+            RunInstancesRequest runRequest = RunInstancesRequest.builder()
+                    .instanceType(Utils.instanceType)
+                    .imageId(Utils.amiID)
+                    .maxCount(workersToCreate)
+                    .minCount(workersToCreate)
+                    .iamInstanceProfile(IamInstanceProfileSpecification.builder().name("yz-role").build())
+                    .keyName("yonatan_ziv_key")
+                    .securityGroupIds("sg-07199d1ea166ce7fd")
+                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
+                    .build();
+
+            RunInstancesResponse response = ec2.runInstances(runRequest);
+
+            // TODO: delete
+            System.out.println("Created " +workersToCreate +" workers.");
+
+            for (Instance instance : response.instances()) {
+                String instanceId = instance.instanceId();
+                workers.add(instanceId);
+
+                CreateTagsRequest tagRequest = CreateTagsRequest.builder()
+                        .resources(instanceId)
+                        .tags(tag)
+                        .build();
+
+                try {
+                    ec2.createTags(tagRequest);
+                    System.out.printf(
+                            "Successfully started EC2 Instance %s based on AMI %s\n",
+                            instanceId, Utils.amiID);
+                } catch (Ec2Exception e) {
+                    System.err.println(e.awsErrorDetails().errorMessage());
+                    System.exit(1);
+                }
             }
         }
     }
 
-    private static void tearDown(){
+    private void tearDown(){
         deleteQueue("local2manager");
         deleteQueue("workers2manager");
         deleteQueue("manager2workers");
     }
 
-    private static void deleteQueue(String queueName){
+    private void deleteQueue(String queueName){
         try {
 
             GetQueueUrlRequest getQueueRequest = GetQueueUrlRequest.builder()

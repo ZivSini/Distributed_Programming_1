@@ -28,7 +28,7 @@ public class Main {
         LocalApp app = new LocalApp(inputFiles, outputFiles, n, terminate);
         app.runApp();
 
-
+//    Worker worker = new Worker();
 
 
 

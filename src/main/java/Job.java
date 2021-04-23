@@ -34,6 +34,11 @@ public class Job {
         this.objectKey = arr[1];
         this.manager2local = arr[2];
         this.n = Integer.parseInt(arr[3]);
+        System.out.println("Job created!");
+        System.out.println("bucketName: " + bucketName);
+        System.out.println("objectKey: " + objectKey);
+        System.out.println("manager2local: " + manager2local);
+        System.out.println("n: " + n);
 
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()

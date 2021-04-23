@@ -13,6 +13,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.*;
 import java.nio.file.Paths;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.ListIterator;
@@ -108,14 +109,27 @@ public class LocalApp {
                 .value("manager")
                 .build();
 
+        String userData = "#!/bin/bash" + "\n"
+                            + "wget https://ass1yonatanziv.s3.amazonaws.com/Manager/ManagerApp.jar" + "\n"
+                            + "java -jar ManagerApp.jar" + "\n";
+        String base64UserData = null;
+
+        try {
+            base64UserData = new String(Base64.getEncoder().encode(userData.getBytes("UTF-8")), "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+
+
         RunInstancesRequest runRequest = RunInstancesRequest.builder()
-                .instanceType(InstanceType.T2_MICRO)
+                .instanceType(Utils.instanceType)
                 .imageId(Utils.amiID)
                 .maxCount(1)
                 .minCount(1)
+                .iamInstanceProfile(IamInstanceProfileSpecification.builder().name("yz-role").build())
                 .keyName("yonatan_ziv_key")
-
-//                .userData(Base64.getEncoder().encodeToString(/*your USER DATA script string*/.getBytes()))
+                .securityGroupIds("sg-07199d1ea166ce7fd")
+//                .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
                 .build();
 
         RunInstancesResponse response = ec2.runInstances(runRequest);
@@ -130,7 +144,7 @@ public class LocalApp {
         try {
             ec2.createTags(tagRequest);
             System.out.printf(
-                    "Successfully started EC2 Instance %s based on AMI %s",
+                    "Successfully started EC2 Instance %s based on AMI %s\n",
                     instanceId, Utils.amiID);
         } catch (Ec2Exception e) {
             System.err.println(e.awsErrorDetails().errorMessage());
@@ -240,6 +254,8 @@ public class LocalApp {
             ListQueuesRequest listQueuesRequest = ListQueuesRequest.builder().queueNamePrefix(prefix).build();
             ListQueuesResponse listQueuesResponse = sqs.listQueues(listQueuesRequest);
 
+            while(listQueuesResponse.queueUrls().size() == 0) listQueuesResponse = sqs.listQueues(listQueuesRequest);
+
             output = listQueuesResponse.queueUrls().get(0);
 
         } catch (SqsException e) {
@@ -327,7 +343,16 @@ public class LocalApp {
                     .maxNumberOfMessages(1)
                     .build();
             List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
+            while (messages.size() == 0)    messages = sqs.receiveMessage(receiveMessageRequest).messages();
+
             output = messages.get(0).body();
+
+            DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
+                    .queueUrl(manager2localURL)
+                    .receiptHandle(messages.get(0).receiptHandle())
+                    .build();
+            sqs.deleteMessage(deleteMessageRequest);
+
         } catch (SqsException e) {
             System.err.println(e.awsErrorDetails().errorMessage());
             System.exit(1);
@@ -336,4 +361,5 @@ public class LocalApp {
     }
 
     //TODO: create tearDown method
+
 }
