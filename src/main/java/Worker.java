@@ -1,6 +1,8 @@
 //import edu.stanford.nlp.neural.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.util.Pair;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import software.amazon.awssdk.regions.Region;
@@ -38,6 +40,7 @@ public class Worker {
     private Properties sentimentProps;
     private StanfordCoreNLP entitiesNERPipeline;
     private StanfordCoreNLP sentimentNERPipeline;
+    private JSONParser parser;
 
 //    private SentimentAnalysisHandler sentimentAnalysisHandler;
 //    private namedEntityRecognitionHandler namedEntityRecognitionHandler;
@@ -51,10 +54,19 @@ public class Worker {
     private void runWorker() {
         while(true){
             Message message = readMessage(); // loads bucketKey, index, text to fields
+            System.out.println("worker received message: "+message.body());
+
             int sentiment = findSentiment(text);
+            System.out.println("sentiment: " + sentiment);
+
             List<String> entities = findEntities(text);
+            System.out.println("entities: " + entities);
+
             sendMessage2Manager(sentiment, entities);
+            System.out.println("sending message to manager");
+
             deleteMessage(message);
+            System.out.println("deleted message");
         }
     }
 
@@ -72,6 +84,8 @@ public class Worker {
                 .region(Region.US_EAST_1)
                 .build();
         this.sqs = SqsClient.create();
+
+        parser = new JSONParser();
 
         this.manager2workers = getQueue("manager2workers");
         this.workers2manager = getQueue("workers2manager");
@@ -111,7 +125,7 @@ public class Worker {
 
     /*
     Receives message from manager.
-    Message format: <bucket/key> <index> <review text>
+    Message format: <bucket/key> <index> <reviewText>
     TODO: deal with terminate msg
      */
     private Message readMessage(){
@@ -125,15 +139,20 @@ public class Worker {
             //busy wait to get message from sqs
             while (messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
 
-            String[] msg = messages.get(0).body().split(" ");
-            this.bucketKey = msg[0];
-            this.index = msg[1];
-            this.text = String.join(" ", Arrays.asList(msg).subList(2, msg.length));
+            String msg = messages.get(0).body();
+
+            JSONObject jsonMsg = (JSONObject) parser.parse(msg);
+            this.bucketKey = jsonMsg.get("bucketKey").toString();
+            this.index = jsonMsg.get("index").toString();
+            this.text = jsonMsg.get("reviewText").toString();
 
             return messages.get(0);
+
         } catch (SqsException e) {
             System.err.println(e.awsErrorDetails().errorMessage());
             System.exit(1);
+        } catch (ParseException e) {
+            e.printStackTrace();
         }
         return null;
     }

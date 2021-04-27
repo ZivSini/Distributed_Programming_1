@@ -1,6 +1,7 @@
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
@@ -17,23 +18,33 @@ public class Job {
     private String bucketName;
     private String objectKey;
     private String manager2local;
-    private List<Review> reviews;
+    private ArrayList<Review> reviews;
     private int n;
     private int resultCounter;
+    private JSONParser parser;
 
 
     /*
     Constructor. Takes the msg from the local app, and parses it.
-    Message format: <bucket> <key> <manager2local sqs URL> <n>
+    Message format: <bucket> <key> <manager2local> <n>
      */
     public Job(String msg, S3Client s3){
-        String[] arr = msg.split(" ");
+
+        JSONObject jsonMsg = null;
+
+        this.parser = new JSONParser();
+        try {
+            jsonMsg = (JSONObject) parser.parse(msg);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
 
         this.resultCounter = 0;
-        this.bucketName = arr[0];
-        this.objectKey = arr[1];
-        this.manager2local = arr[2];
-        this.n = Integer.parseInt(arr[3]);
+        this.bucketName = jsonMsg.get("bucket").toString();
+        this.objectKey = jsonMsg.get("key").toString();
+        this.manager2local = jsonMsg.get("manager2local").toString();
+        this.n = Integer.parseInt(jsonMsg.get("n").toString());
+
         System.out.println("Job created!");
         System.out.println("bucketName: " + bucketName);
         System.out.println("objectKey: " + objectKey);
@@ -56,9 +67,9 @@ public class Job {
         try {
             while ((line = reader.readLine()) != null) {
                 JSONObject json = (JSONObject) parser.parse(line);
-                JSONArray reviews = (JSONArray) json.get("reviews");
-                for(int i=0 ; i<reviews.size() ; i++){
-                    JSONObject jsonReview = (JSONObject) reviews.get(i);
+                JSONArray reviewsJson = (JSONArray) json.get("reviews");
+                for(int i=0 ; i<reviewsJson.size() ; i++){
+                    JSONObject jsonReview = (JSONObject) reviewsJson.get(i);
                     String text = jsonReview.get("text").toString();
                     String link = jsonReview.get("link").toString();
                     int rating = Integer.parseInt(jsonReview.get("rating").toString());
@@ -117,6 +128,11 @@ public class Job {
     }
 
     public int getWorkersN(){
+        System.out.println("reviews.size() = " +reviews.size() +", n = " +n);
         return reviews.size() / n;
+    }
+
+    public String getBucketKey(){
+        return  bucketName +"/" +objectKey;
     }
 }

@@ -1,4 +1,7 @@
+import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 import org.mortbay.util.ajax.JSON;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -13,10 +16,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.*;
 import java.nio.file.Paths;
-import java.util.Base64;
-import java.util.Date;
-import java.util.List;
-import java.util.ListIterator;
+import java.util.*;
 
 public class LocalApp {
     // Fields
@@ -34,6 +34,7 @@ public class LocalApp {
     private String manager2localURL;
     private Boolean[] received;
     private int receivedCounter;
+    private JSONParser parser;
 
     // Constructor
     public LocalApp(List<String> inputPaths, List<String> outputPaths, int n, boolean terminate){
@@ -52,6 +53,7 @@ public class LocalApp {
         this.manager2localURL = createQueue();
         this.received = new Boolean[inputPaths.size()];
         this.receivedCounter = 0;
+        this.parser = new JSONParser();
     }
 
     // Methods
@@ -110,7 +112,7 @@ public class LocalApp {
                 .build();
 
         String userData = "#!/bin/bash" + "\n"
-                            + "wget https://ass1yonatanziv.s3.amazonaws.com/Manager/ManagerApp.jar" + "\n"
+                            + "wget https://ass1yonatanziv.s3.amazonaws.com/ManagerApp.jar" + "\n"
                             + "java -jar ManagerApp.jar" + "\n";
         String base64UserData = null;
 
@@ -266,7 +268,7 @@ public class LocalApp {
         return output;
     }
 
-    // Message format: <bucket> <key> <manager2local sqs URL> <n>
+    // Message format: <bucket> <key> <manager2local> <n>
     private void sendURLMessages2Manager(){
         try {
             ListObjectsRequest listObjects = ListObjectsRequest
@@ -278,9 +280,15 @@ public class LocalApp {
             List<S3Object> objects = res.contents();
 
             for (S3Object myValue : objects) {
+                JSONObject json = new JSONObject();
+                json.put("bucket",bucketName);
+                json.put("key", myValue.key());
+                json.put("manager2local", manager2localURL);
+                json.put("n", n);
+
                 sqs.sendMessage(SendMessageRequest.builder()
                         .queueUrl(local2managerURL)
-                        .messageBody(bucketName +" " +myValue.key() +" " +manager2localURL + " " +n)
+                        .messageBody(json.toJSONString())
                         .build());
             }
 
@@ -295,9 +303,14 @@ public class LocalApp {
 
     // TODO: parse to HTML and save in output files
     private void parseMessageFromManager(String msg){
-        String[] tmp = msg.split(" ");
-        String summaryName = tmp[0];
-        int index = Integer.parseInt(tmp[1]);
+        JSONObject jsonMsg = null;
+        try {
+            jsonMsg = (JSONObject) parser.parse(msg);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+        String summaryName = jsonMsg.get("summeryName").toString();
+        int index = Integer.parseInt(jsonMsg.get("index").toString());
 
 //        check if we didn't receive this message before
         if(received[index]) return;
@@ -326,12 +339,43 @@ public class LocalApp {
             e.printStackTrace();
         }
 
-        createHTML("tmp" + index, outputPaths.get(index));
+        String output = getOutput("tmp" + index);
+        createHTML(output, outputPaths.get(index));
     }
 
-//    TODO: learn how to create html
-    private void createHTML(String fileName, String outputFileName) {
+    private String getOutput(String fileName) {
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(fileName)
+                .build();
 
+        ResponseInputStream<GetObjectResponse> response = s3.getObject(getObjectRequest);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(response));
+
+        String line;
+        String output = "";
+
+        try {
+            while ((line = reader.readLine()) != null) {
+                output += line;
+                }
+
+        } catch (Exception ignored) {}
+
+        return output;
+    }
+
+    //    TODO: learn how to create html
+    private void createHTML(String output, String outputFileName) {
+        JSONObject parsedOutput = null;
+
+        try {
+            parsedOutput = (JSONObject) parser.parse(output);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+
+        System.out.println(parsedOutput.toJSONString());
     }
 
     private String readMessageFromManager() {

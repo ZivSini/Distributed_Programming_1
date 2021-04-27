@@ -23,7 +23,7 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>2.4</version>
                     <configuration>
-                        <release>11</release>  <!--or <release>10</release>-->
+<!--                        <release>11</release>  &lt;!&ndash;or <release>10</release>&ndash;&gt;-->
                     </configuration>
                 </plugin>
 

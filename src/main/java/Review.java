@@ -38,6 +38,7 @@ public class Review {
     }
 
     public void setResult(List<String> entities, int sentiment) {
+//        this.entities.addAll(entities);   ziv added this line, didnt try yet!!!!!!!!!!!!!!!!!!!!!!!!!!
         this.entities = entities;
         this.sentiment = sentiment;
         this.isDone = true;

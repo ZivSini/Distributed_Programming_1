@@ -67,7 +67,12 @@ public class Manager {
             System.out.println("Listening to local apps");
             Job job = readMessageFromLocalApps();
 
+            jobs.put(job.getBucketKey(), job);
+
+            System.out.println("job.getWorkersN: "+ job.getWorkersN());
+            System.out.println("workers.size(): "+ workers.size());
             if(job.getWorkersN() > workers.size()){
+                System.out.println("entered if statement");
                 createKWorkers(job.getWorkersN() - workers.size());
             }
 
@@ -104,8 +109,7 @@ public class Manager {
             // Busy wait for new message
             while(messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
 
-            // TODO: delete
-            System.out.println("Received a message from a local app!");
+            System.out.println("Received a message from a local app:");
             System.out.println(messages.get(0).body());
 
             output = new Job(messages.get(0).body() , s3);
@@ -142,9 +146,11 @@ public class Manager {
                     .queueUrl(workers2manager)
                     .receiptHandle(messages.get(0).receiptHandle())
                     .build();
+
             sqs.deleteMessage(deleteMessageRequest);
 
-
+            System.out.println("Received message from workers:");
+            System.out.println(msg.toJSONString());
 
             Job job = jobs.get(msg.get("bucketKey").toString());
             int index = Integer.parseInt(msg.get("index").toString());
@@ -157,9 +163,6 @@ public class Manager {
                 for (int i=0 ; i<jArray.size() ; i++) entities.add(jArray.get(i).toString());
 
             job.addResult(entities, sentiment, index);
-
-
-
 
             if(job.isDone())
                 System.out.println("Job is Done");
@@ -180,21 +183,34 @@ public class Manager {
         JSONObject mainJson = new JSONObject();
         mainJson.put("key", job.getObjectKey());
 
-        JSONArray json = new JSONArray();
+        JSONArray reviewsJSON = new JSONArray();
+
         for(Review review: job.getReviews()){
-            JSONObject obj = new JSONObject();
-            obj.put("link",review.getLink());
-            obj.put("sentiment",review.getSentiment());
-            JSONArray entities = new JSONArray();
-            for (String e:review.getEntities()) {
-                entities.add(e);
+            JSONObject singleReviewJSON = new JSONObject();
+
+            // Add review's properties
+            singleReviewJSON.put("link",review.getLink());
+            singleReviewJSON.put("sentiment",review.getSentiment());
+            singleReviewJSON.put("sarcasm",Math.abs(review.getRating() - review.getSentiment()));
+
+            // Add review's entities
+            JSONArray entitiesJsonArr = new JSONArray();
+
+            if(review == null) System.out.println("Review is null!");
+            else if(review.getEntities() == null) System.out.println("Review's entities list is null!");
+            else for(String s : review.getEntities()) System.out.println(s);
+
+//            review.getEntities is null!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            for(String s : review.getEntities()) {
+                entitiesJsonArr.add(s);
             }
-            obj.put("entities", entities);
-            obj.put("sarcasm",Math.abs(review.getRating() - review.getSentiment()));
-            json.add(obj);
+
+            singleReviewJSON.put("entities", entitiesJsonArr);
+
+            reviewsJSON.add(singleReviewJSON);
         }
 
-        mainJson.put("summary" ,json);
+        mainJson.put("summary" ,reviewsJSON);
         try (FileWriter file = new FileWriter("summary_"+job.getObjectKey() +".json")) {
             //We can write any JSONArray or JSONObject instance to the file
             file.write(mainJson.toJSONString());
@@ -212,9 +228,13 @@ public class Manager {
         PutObjectResponse response = s3.putObject(objectRequest, Paths.get("summary_"+job.getObjectKey() +".json"));
         String num = job.getObjectKey().split("input")[1];
 
+        JSONObject jsonMsg = new JSONObject();
+        jsonMsg.put("summeryKey", "summary_"+job.getObjectKey() + ".json");
+        jsonMsg.put("index", num);
+
         sqs.sendMessage(SendMessageRequest.builder()
                 .queueUrl(job.getManager2local())
-                .messageBody("summary_"+job.getObjectKey() + ".json " +num)
+                .messageBody(jsonMsg.toString())
                 .build());
 
         System.out.println("Job is summarized and sent to local app");
@@ -222,13 +242,20 @@ public class Manager {
 
     /*
     Sends tasks from job to workers queue.
-    message format: <bucket/key> <index> <review text>
+    message format: <bucket/key> <index> <reviewText>
      */
     private void sendTasksToWorkers(Job job){
         for(int i=0 ; i<job.getReviews().size() ; i++){
+            JSONObject json = new JSONObject();
+
+            json.put("bucketKey", job.getBucketKey());
+            json.put("index", i);
+            json.put("reviewText", job.getReviews().get(i).getText());
+
+
             sqs.sendMessage(SendMessageRequest.builder()
                     .queueUrl(manager2workers)
-                    .messageBody(job.getBucketName() +"/" +job.getObjectKey() +" " +i +" " +job.getReviews().get(i).getText())
+                    .messageBody(json.toJSONString())
                     .build());
         }
     }
@@ -252,8 +279,8 @@ public class Manager {
                     .build();
 
             String userData = "#!/bin/bash" + "\n"
-                    + "wget https://ass1yonatanziv.s3.amazonaws.com/Worker/ManagerApp.jar" + "\n"
-                    + "java -jar ManagerApp.jar" + "\n";
+                    + "wget https://ass1yonatanziv.s3.amazonaws.com/WorkerApp.jar" + "\n"
+                    + "java -jar WorkerApp.jar" + "\n";
             String base64UserData = null;
 
             try {
@@ -271,7 +298,7 @@ public class Manager {
                     .iamInstanceProfile(IamInstanceProfileSpecification.builder().name("yz-role").build())
                     .keyName("yonatan_ziv_key")
                     .securityGroupIds("sg-07199d1ea166ce7fd")
-                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
+//                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
                     .build();
 
             RunInstancesResponse response = ec2.runInstances(runRequest);
