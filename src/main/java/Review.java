@@ -1,3 +1,5 @@
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public class Review {
@@ -15,6 +17,7 @@ public class Review {
         this.rating = rating;
         this.index = index;
         this.isDone = false;
+        this.entities = new ArrayList<>();
     }
 
     public String getText() {
@@ -38,8 +41,10 @@ public class Review {
     }
 
     public void setResult(List<String> entities, int sentiment) {
-//        this.entities.addAll(entities);   ziv added this line, didnt try yet!!!!!!!!!!!!!!!!!!!!!!!!!!
-        this.entities = entities;
+        // TODO: delete
+        System.out.println("Adding result to review: " + Arrays.toString(entities.toArray()));
+
+        this.entities.addAll(entities);
         this.sentiment = sentiment;
         this.isDone = true;
     }

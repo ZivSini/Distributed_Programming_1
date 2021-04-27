@@ -30,6 +30,8 @@ public class Manager {
     private HashMap<String, Job> jobs;
     private List<String> workers;
     private JSONParser parser;
+    private boolean terminate;
+    private boolean[] terminateMessages;
 
     public static void main(String[] args){
 
@@ -52,6 +54,8 @@ public class Manager {
         jobs = new HashMap<>();
         workers = new ArrayList<>();
         parser = new JSONParser();
+        terminate = false;
+        terminateMessages = null;
 
         System.out.println("Created manager successfully");
     }
@@ -59,27 +63,45 @@ public class Manager {
     public void runManager(){
         new Thread(() -> {
             System.out.println("Listener thread created");
-            while (true)
+            while (true) {
                 readMessageFromWorkers();
+
+                if(terminate && jobs.isEmpty()) tearDown();
+            }
+
+
         }).start();
 
         while(true){
             System.out.println("Listening to local apps");
+
             Job job = readMessageFromLocalApps();
 
             jobs.put(job.getBucketKey(), job);
 
-            System.out.println("job.getWorkersN: "+ job.getWorkersN());
-            System.out.println("workers.size(): "+ workers.size());
             if(job.getWorkersN() > workers.size()){
-                System.out.println("entered if statement");
+                System.out.println("Adding new Workers");
                 createKWorkers(job.getWorkersN() - workers.size());
             }
 
             sendTasksToWorkers(job);
-            // TODO: should we kill workers before terminate?
+
+            if(job.isTerminate())
+            {
+                if(terminateMessages == null)
+                {
+                    terminateMessages = new boolean[job.getNumJobs()];
+                    Arrays.fill(terminateMessages,false);
+                }
+                terminateMessages[job.getJobIndex()] = true;
+                if(shouldBreak())
+                {
+                    break;
+                }
+            }
         }
     }
+
 
     private String createQueue(String queueName){
         CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
@@ -112,6 +134,7 @@ public class Manager {
             System.out.println("Received a message from a local app:");
             System.out.println(messages.get(0).body());
 
+
             output = new Job(messages.get(0).body() , s3);
 
             DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
@@ -127,7 +150,6 @@ public class Manager {
     }
 
     private void readMessageFromWorkers(){
-
         try{
             ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
                     .queueUrl(workers2manager)
@@ -138,7 +160,6 @@ public class Manager {
             // Busy wait for a new message
             while(messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
 
-            System.out.println("New message received");
 
             JSONObject msg = (JSONObject) parser.parse(messages.get(0).body());
 
@@ -150,23 +171,25 @@ public class Manager {
             sqs.deleteMessage(deleteMessageRequest);
 
             System.out.println("Received message from workers:");
-            System.out.println(msg.toJSONString());
+            System.out.println(msg.toJSONString() +"\n");
 
             Job job = jobs.get(msg.get("bucketKey").toString());
             int index = Integer.parseInt(msg.get("index").toString());
             int sentiment = Integer.parseInt(msg.get("sentiment").toString());
 
             List<String> entities = new ArrayList();
-            JSONArray jArray = (JSONArray) msg.get(0);
+            JSONArray jArray = (JSONArray) msg.get("entities");
 
-            if (jArray != null)
-                for (int i=0 ; i<jArray.size() ; i++) entities.add(jArray.get(i).toString());
+            if (jArray != null) {
+                for (int i = 0; i < jArray.size(); i++) entities.add(jArray.get(i).toString());
+            }
 
             job.addResult(entities, sentiment, index);
 
-            if(job.isDone())
-                System.out.println("Job is Done");
+            if(job.isDone()) {
+                System.out.println("Job is Done!\n");
                 summarizeAndSend2Local(job);
+            }
 
         } catch (SqsException | ParseException e) {
             System.err.println(e);
@@ -196,11 +219,6 @@ public class Manager {
             // Add review's entities
             JSONArray entitiesJsonArr = new JSONArray();
 
-            if(review == null) System.out.println("Review is null!");
-            else if(review.getEntities() == null) System.out.println("Review's entities list is null!");
-            else for(String s : review.getEntities()) System.out.println(s);
-
-//            review.getEntities is null!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             for(String s : review.getEntities()) {
                 entitiesJsonArr.add(s);
             }
@@ -211,6 +229,7 @@ public class Manager {
         }
 
         mainJson.put("summary" ,reviewsJSON);
+
         try (FileWriter file = new FileWriter("summary_"+job.getObjectKey() +".json")) {
             //We can write any JSONArray or JSONObject instance to the file
             file.write(mainJson.toJSONString());
@@ -226,17 +245,18 @@ public class Manager {
                 .build();
 
         PutObjectResponse response = s3.putObject(objectRequest, Paths.get("summary_"+job.getObjectKey() +".json"));
-        String num = job.getObjectKey().split("input")[1];
+        String index = job.getObjectKey().split("input")[1];
 
         JSONObject jsonMsg = new JSONObject();
-        jsonMsg.put("summeryKey", "summary_"+job.getObjectKey() + ".json");
-        jsonMsg.put("index", num);
+        jsonMsg.put("summeryKey", "summary_"+job.getObjectKey() /*+ ".json"*/);
+        jsonMsg.put("index", index);
 
         sqs.sendMessage(SendMessageRequest.builder()
                 .queueUrl(job.getManager2local())
                 .messageBody(jsonMsg.toString())
                 .build());
 
+        jobs.remove(job.getBucketKey());
         System.out.println("Job is summarized and sent to local app");
     }
 
@@ -257,6 +277,8 @@ public class Manager {
                     .queueUrl(manager2workers)
                     .messageBody(json.toJSONString())
                     .build());
+
+            System.out.println("Sent a new message to workers:\n" +json.toJSONString() +"\n");
         }
     }
 
@@ -268,10 +290,10 @@ public class Manager {
     Creates k new worker instances and updates the workers list
      */
     private void createKWorkers(int k){
-        if(workers.size() < 18) {
+        if(workers.size() < Utils.maxWorkers) {
 
             // Number of workers can't be greater then 18 (AWS account restrictions)
-            int workersToCreate = k + workers.size() > 18 ? 18 -workers.size() : k;
+            int workersToCreate = k + workers.size() > Utils.maxWorkers ? Utils.maxWorkers -workers.size() : k;
 
             Tag tag = Tag.builder()
                     .key("name")
@@ -298,7 +320,7 @@ public class Manager {
                     .iamInstanceProfile(IamInstanceProfileSpecification.builder().name("yz-role").build())
                     .keyName("yonatan_ziv_key")
                     .securityGroupIds("sg-07199d1ea166ce7fd")
-//                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
+                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
                     .build();
 
             RunInstancesResponse response = ec2.runInstances(runRequest);
@@ -328,10 +350,28 @@ public class Manager {
         }
     }
 
+    private boolean shouldBreak() {
+        for (boolean b:terminateMessages) {
+            if(!b)
+                return false;
+        }
+        return true;
+    }
+
     private void tearDown(){
         deleteQueue("local2manager");
         deleteQueue("workers2manager");
         deleteQueue("manager2workers");
+
+        // Delete all workers
+        if(!workers.isEmpty()) {
+            TerminateInstancesRequest terminateRequest = TerminateInstancesRequest
+                    .builder()
+                    .instanceIds(workers)
+                    .build();
+
+            ec2.terminateInstances(terminateRequest);
+        }
     }
 
     private void deleteQueue(String queueName){

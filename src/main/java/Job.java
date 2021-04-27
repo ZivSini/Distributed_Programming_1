@@ -19,9 +19,11 @@ public class Job {
     private String objectKey;
     private String manager2local;
     private ArrayList<Review> reviews;
-    private int n;
-    private int resultCounter;
     private JSONParser parser;
+    private int n;
+    private boolean terminate;
+    private int numJobs;
+    private int jobIndex;
 
 
     /*
@@ -39,17 +41,24 @@ public class Job {
             e.printStackTrace();
         }
 
-        this.resultCounter = 0;
         this.bucketName = jsonMsg.get("bucket").toString();
         this.objectKey = jsonMsg.get("key").toString();
         this.manager2local = jsonMsg.get("manager2local").toString();
         this.n = Integer.parseInt(jsonMsg.get("n").toString());
+        this.terminate = Boolean.getBoolean(jsonMsg.get("n").toString());
+        this.numJobs = Integer.parseInt(jsonMsg.get("numJobs").toString());
+        this.jobIndex = Integer.parseInt(jsonMsg.get("jobIndex").toString());
 
         System.out.println("Job created!");
         System.out.println("bucketName: " + bucketName);
         System.out.println("objectKey: " + objectKey);
         System.out.println("manager2local: " + manager2local);
         System.out.println("n: " + n);
+        System.out.println("terminate: " + terminate);
+        System.out.println("numJobs: " + numJobs);
+        System.out.println("jobIndex: " + jobIndex);
+
+
 
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
@@ -87,10 +96,8 @@ public class Job {
     public void addResult(List<String> entities, int sentiment, int i){
         Review review = reviews.get(i);
 
-        if(!review.isDone()){
+        if(!review.isDone())
             review.setResult(entities, sentiment);
-            resultCounter++;
-        }
 
     }
 
@@ -115,9 +122,15 @@ public class Job {
     }
 
     public boolean isDone(){
-        return reviews.size() == resultCounter;
-    }
+        boolean output = true;
+        for(Review rev : reviews)
+            if(!rev.isDone()) return false;
 
+        return true;
+        // TODO: clean
+
+        //        return reviews.size() == resultCounter;
+    }
 
     public String getManager2local() {
         return manager2local;
@@ -134,5 +147,17 @@ public class Job {
 
     public String getBucketKey(){
         return  bucketName +"/" +objectKey;
+    }
+
+    public boolean isTerminate() {
+        return terminate;
+    }
+
+    public int getNumJobs() {
+        return numJobs;
+    }
+
+    public int getJobIndex() {
+        return jobIndex;
     }
 }

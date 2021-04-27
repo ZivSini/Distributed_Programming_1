@@ -33,8 +33,8 @@ public class LocalApp {
     private String local2managerURL;
     private String manager2localURL;
     private Boolean[] received;
-    private int receivedCounter;
     private JSONParser parser;
+    private String managerID;
 
     // Constructor
     public LocalApp(List<String> inputPaths, List<String> outputPaths, int n, boolean terminate){
@@ -52,25 +52,27 @@ public class LocalApp {
         this.sqs = SqsClient.create();
         this.manager2localURL = createQueue();
         this.received = new Boolean[inputPaths.size()];
-        this.receivedCounter = 0;
+        Arrays.fill(received, false);
         this.parser = new JSONParser();
     }
 
     // Methods
     public void runApp(){
 
-        String managerID = getManager();
+        managerID = getManager();
         System.out.println("Connected successfully to manager " +managerID);
 
         this.local2managerURL = getLocal2managerQueue();
 
-      uploadFilesToS3();
-      sendURLMessages2Manager();
-      String msg = readMessageFromManager();
+        uploadFilesToS3();
+        sendURLMessages2Manager();
 
-      parseMessageFromManager(msg);
+        while(!isDone()) {
+            String msg = readMessageFromManager();
+            parseMessageFromManager(msg);
+        }
 
-      //tearDown();
+        tearDown();
     }
 
 
@@ -112,8 +114,8 @@ public class LocalApp {
                 .build();
 
         String userData = "#!/bin/bash" + "\n"
-                            + "wget https://ass1yonatanziv.s3.amazonaws.com/ManagerApp.jar" + "\n"
-                            + "java -jar ManagerApp.jar" + "\n";
+                + "wget https://ass1yonatanziv.s3.amazonaws.com/ManagerApp.jar" + "\n"
+                + "java -jar ManagerApp.jar" + "\n";
         String base64UserData = null;
 
         try {
@@ -183,8 +185,230 @@ public class LocalApp {
         System.out.println("Uploaded the input files to S3 successfully to bucket " +this.bucketName);
     }
 
-    private void deleteBucket(){
+    private String createQueue(){
+        CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
+                .queueName(queueName)
+                .build();
 
+        sqs.createQueue(createQueueRequest);
+
+        GetQueueUrlResponse getQueueUrlResponse =
+                sqs.getQueueUrl(GetQueueUrlRequest.builder().queueName(queueName).build());
+
+        return getQueueUrlResponse.queueUrl();
+    }
+
+    private String getLocal2managerQueue(){
+        String prefix = "local2manager", output = "";
+
+        try {
+            ListQueuesRequest listQueuesRequest = ListQueuesRequest.builder().queueNamePrefix(prefix).build();
+            ListQueuesResponse listQueuesResponse = sqs.listQueues(listQueuesRequest);
+
+            while(listQueuesResponse.queueUrls().size() == 0) listQueuesResponse = sqs.listQueues(listQueuesRequest);
+
+            output = listQueuesResponse.queueUrls().get(0);
+
+        } catch (SqsException e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
+            System.exit(1);
+        }
+
+        return output;
+    }
+
+    // Message format: <bucket> <key> <manager2local> <n> <terminate> <number of Jobs> <job index in list>
+    private void sendURLMessages2Manager(){
+        try {
+            ListObjectsRequest listObjects = ListObjectsRequest
+                    .builder()
+                    .bucket(bucketName)
+                    .build();
+
+            ListObjectsResponse res = s3.listObjects(listObjects);
+            List<S3Object> objects = res.contents();
+
+            for (int i=0; i<objects.size();i++) {
+                S3Object myValue = objects.get(i);
+                JSONObject json = new JSONObject();
+                json.put("bucket",bucketName);
+                json.put("key", myValue.key());
+                json.put("manager2local", manager2localURL);
+                json.put("n", n);
+                json.put("terminate", terminate);
+                json.put("numJobs", objects.size());
+                json.put("jobIndex", i);
+
+                sqs.sendMessage(SendMessageRequest.builder()
+                        .queueUrl(local2managerURL)
+                        .messageBody(json.toJSONString())
+                        .build());
+            }
+
+//            if(terminate)
+//                sqs.sendMessage(SendMessageRequest.builder()
+//                        .queueUrl(local2managerURL)
+//                        .messageBody("terminate")
+//                        .build());
+
+        } catch (S3Exception e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
+            System.exit(1);
+        }
+    }
+
+    private void parseMessageFromManager(String msg){
+        JSONObject jsonMsg = null;
+        try {
+            jsonMsg = (JSONObject) parser.parse(msg);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+        String summaryName = jsonMsg.get("summeryKey").toString();
+        int index = Integer.parseInt(jsonMsg.get("index").toString());
+
+//        check if we didn't receive this message before
+        if(received[index]) return;
+
+        received[index] = true;
+
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName)
+                .key(summaryName)
+                .build();
+
+        ResponseInputStream<GetObjectResponse> response = s3.getObject(getObjectRequest);
+        BufferedReader reader = new BufferedReader(new InputStreamReader(response));
+
+        StringBuilder output = new StringBuilder();
+
+        try {
+            String line;
+            while ((line = reader.readLine()) != null)
+                output.append(line);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        createHTML(output.toString(), outputPaths.get(index));
+    }
+
+    private void createHTML(String output, String outputFileName) {
+        JSONObject parsedOutput = null;
+
+        try {
+            parsedOutput = (JSONObject) parser.parse(output);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+
+        JSONArray summary = (JSONArray) parsedOutput.get("summary");
+
+        File file = new File(outputFileName);
+        FileWriter myWriter = null;
+        try {
+            myWriter = new FileWriter(outputFileName);
+
+
+            myWriter.write("<html>\n" +
+                    "<body>\n" +
+                    "<ol>\n");
+
+            for(Object rev : summary){
+                String link = ((JSONObject)rev).get("link").toString();
+                int sentiment = Integer.parseInt(((JSONObject)rev).get("sentiment").toString());
+                String sarcasm = ((JSONObject)rev).get("sarcasm").toString();
+                JSONArray entities = (JSONArray) ((JSONObject)rev).get("entities");
+
+
+                myWriter.write("<li>\n" + "<ul>");
+
+                // link
+                myWriter.write("<li><a style=\"" +Utils.colors[sentiment] +"\" href=\"" +link +"\">" +link +"</a></li>\n");
+
+                // sarcasm
+                myWriter.write("<li>Sarcasm: " +sarcasm +"</li>");
+
+                // entities
+                myWriter.write("<li>Entities:<ul>\n");
+
+                for(Object ent : entities){
+                    myWriter.write("<li>" +ent.toString() +"</li>");
+                }
+                myWriter.write("</ul></li>\n");
+
+
+                myWriter.write("</ul>\n" + "</li>");
+            }
+
+            myWriter.write("</ol>\n" + "</body>\n" + "</html>");
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private String readMessageFromManager() {
+        String output = null;
+
+        try{
+            ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
+                    .queueUrl(manager2localURL)
+                    .maxNumberOfMessages(1)
+                    .build();
+            List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
+            while (messages.size() == 0) messages = sqs.receiveMessage(receiveMessageRequest).messages();
+
+            output = messages.get(0).body();
+
+            DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
+                    .queueUrl(manager2localURL)
+                    .receiptHandle(messages.get(0).receiptHandle())
+                    .build();
+            sqs.deleteMessage(deleteMessageRequest);
+
+        } catch (SqsException e) {
+            System.err.println(e.awsErrorDetails().errorMessage());
+            System.exit(1);
+        }
+        return output;
+    }
+
+    private boolean isDone(){
+
+        for(boolean b : received)
+            if(!b) return false;
+
+        return true;
+    }
+
+    private void tearDown(){
+        if(terminate)
+            deleteManager();
+
+        deleteBucket();
+        deleteQueue();
+    }
+
+    // Wait for OK termination message from the manager, and terminate Manager
+    private void deleteManager() {
+        String msg = readMessageFromManager();
+
+        while(!msg.equals("terminate")) readMessageFromManager();
+
+        TerminateInstancesRequest terminateRequest = TerminateInstancesRequest
+                .builder()
+                .instanceIds(managerID)
+                .build();
+
+        ec2.terminateInstances(terminateRequest);
+
+        System.out.println("Terminated manager with id: " +managerID);
+    }
+
+    private void deleteBucket(){
         try {
             ListObjectsRequest listObjects = ListObjectsRequest
                     .builder()
@@ -208,29 +432,15 @@ public class LocalApp {
             System.exit(1);
         }
 
-
-
-        DeleteBucketRequest deleteBucketRequest = DeleteBucketRequest.builder().bucket(this.bucketName).build();
-        s3.deleteBucket(deleteBucketRequest);
-
-    }
-
-    private String createQueue(){
-        CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
-                .queueName(queueName)
+        DeleteBucketRequest deleteBucketRequest = DeleteBucketRequest.builder()
+                .bucket(this.bucketName)
                 .build();
 
-        sqs.createQueue(createQueueRequest);
-
-        GetQueueUrlResponse getQueueUrlResponse =
-                sqs.getQueueUrl(GetQueueUrlRequest.builder().queueName(queueName).build());
-
-        return getQueueUrlResponse.queueUrl();
+        s3.deleteBucket(deleteBucketRequest);
     }
 
     private void deleteQueue(){
         try {
-
             GetQueueUrlRequest getQueueRequest = GetQueueUrlRequest.builder()
                     .queueName(queueName)
                     .build();
@@ -248,162 +458,4 @@ public class LocalApp {
             System.exit(1);
         }
     }
-
-    private String getLocal2managerQueue(){
-        String prefix = "local2manager", output = "";
-
-        try {
-            ListQueuesRequest listQueuesRequest = ListQueuesRequest.builder().queueNamePrefix(prefix).build();
-            ListQueuesResponse listQueuesResponse = sqs.listQueues(listQueuesRequest);
-
-            while(listQueuesResponse.queueUrls().size() == 0) listQueuesResponse = sqs.listQueues(listQueuesRequest);
-
-            output = listQueuesResponse.queueUrls().get(0);
-
-        } catch (SqsException e) {
-            System.err.println(e.awsErrorDetails().errorMessage());
-            System.exit(1);
-        }
-
-        return output;
-    }
-
-    // Message format: <bucket> <key> <manager2local> <n>
-    private void sendURLMessages2Manager(){
-        try {
-            ListObjectsRequest listObjects = ListObjectsRequest
-                    .builder()
-                    .bucket(bucketName)
-                    .build();
-
-            ListObjectsResponse res = s3.listObjects(listObjects);
-            List<S3Object> objects = res.contents();
-
-            for (S3Object myValue : objects) {
-                JSONObject json = new JSONObject();
-                json.put("bucket",bucketName);
-                json.put("key", myValue.key());
-                json.put("manager2local", manager2localURL);
-                json.put("n", n);
-
-                sqs.sendMessage(SendMessageRequest.builder()
-                        .queueUrl(local2managerURL)
-                        .messageBody(json.toJSONString())
-                        .build());
-            }
-
-        } catch (S3Exception e) {
-            System.err.println(e.awsErrorDetails().errorMessage());
-            System.exit(1);
-        }
-
-
-
-    }
-
-    // TODO: parse to HTML and save in output files
-    private void parseMessageFromManager(String msg){
-        JSONObject jsonMsg = null;
-        try {
-            jsonMsg = (JSONObject) parser.parse(msg);
-        } catch (ParseException e) {
-            e.printStackTrace();
-        }
-        String summaryName = jsonMsg.get("summeryName").toString();
-        int index = Integer.parseInt(jsonMsg.get("index").toString());
-
-//        check if we didn't receive this message before
-        if(received[index]) return;
-
-        received[index] = true;
-        receivedCounter++;
-
-
-        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .bucket(bucketName)
-                .key(summaryName)
-                .build();
-
-        ResponseInputStream<GetObjectResponse> response = s3.getObject(getObjectRequest);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(response));
-
-        FileWriter file = null;
-        try {
-            file = new FileWriter("tmp" + index);
-            String line;
-            while ((line = reader.readLine()) != null) {
-                file.write(line);
-                file.flush();
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        String output = getOutput("tmp" + index);
-        createHTML(output, outputPaths.get(index));
-    }
-
-    private String getOutput(String fileName) {
-        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .bucket(bucketName)
-                .key(fileName)
-                .build();
-
-        ResponseInputStream<GetObjectResponse> response = s3.getObject(getObjectRequest);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(response));
-
-        String line;
-        String output = "";
-
-        try {
-            while ((line = reader.readLine()) != null) {
-                output += line;
-                }
-
-        } catch (Exception ignored) {}
-
-        return output;
-    }
-
-    //    TODO: learn how to create html
-    private void createHTML(String output, String outputFileName) {
-        JSONObject parsedOutput = null;
-
-        try {
-            parsedOutput = (JSONObject) parser.parse(output);
-        } catch (ParseException e) {
-            e.printStackTrace();
-        }
-
-        System.out.println(parsedOutput.toJSONString());
-    }
-
-    private String readMessageFromManager() {
-        String output = null;
-
-        try{
-            ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
-                    .queueUrl(manager2localURL)
-                    .maxNumberOfMessages(1)
-                    .build();
-            List<Message> messages = sqs.receiveMessage(receiveMessageRequest).messages();
-            while (messages.size() == 0)    messages = sqs.receiveMessage(receiveMessageRequest).messages();
-
-            output = messages.get(0).body();
-
-            DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
-                    .queueUrl(manager2localURL)
-                    .receiptHandle(messages.get(0).receiptHandle())
-                    .build();
-            sqs.deleteMessage(deleteMessageRequest);
-
-        } catch (SqsException e) {
-            System.err.println(e.awsErrorDetails().errorMessage());
-            System.exit(1);
-        }
-        return output;
-    }
-
-    //TODO: create tearDown method
-
 }
