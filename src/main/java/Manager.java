@@ -26,6 +26,7 @@ public class Manager {
     private String local2manager;
     private String workers2manager;
     private String manager2workers;
+    private String terminatingLocalAppQueue;
     private HashMap<String, Job> jobs;
     private List<String> workers;
     private JSONParser parser;
@@ -88,6 +89,7 @@ public class Manager {
             // If terminate should happen, it's updated in method readMessageFromLocalApps.
             if(terminate) {
                 System.out.println("Starting termination process");
+                terminatingLocalAppQueue = newJobs.get(0).getManager2local();
                 break;
             }
         }
@@ -160,9 +162,6 @@ public class Manager {
                     .build();
 
             sqs.deleteMessage(deleteMessageRequest);
-
-//            System.out.println("Received message from workers:");
-//            System.out.println(msg.toJSONString() +"\n");
 
             Job job = jobs.get(msg.get("bucketKey").toString());
             int index = Integer.parseInt(msg.get("index").toString());
@@ -269,7 +268,6 @@ public class Manager {
                     .messageBody(json.toJSONString())
                     .build());
 
-//            System.out.println("Sent a new message to workers:\n" +json.toJSONString() +"\n");
         }
     }
 
@@ -356,6 +354,11 @@ public class Manager {
 
             System.out.println("Terminated all workers");
         }
+
+        sqs.sendMessage(SendMessageRequest.builder()
+                .queueUrl(terminatingLocalAppQueue)
+                .messageBody("terminate")
+                .build());
     }
 
     private void deleteQueue(String queueName){
