@@ -99,9 +99,6 @@ public class Worker {
 
         entitiesNERPipeline = new StanfordCoreNLP(entitiesProps);
 //        sentimentNERPipeline = new StanfordCoreNLP(sentimentProps);
-
-//        System.out.println(findSentiment("The banana is very useful"));
-//        printEntities("the banana is very useful");
     }
 
     private String getQueue(String prefix){

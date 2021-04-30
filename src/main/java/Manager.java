@@ -12,7 +12,6 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
-import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
@@ -31,7 +30,6 @@ public class Manager {
     private List<String> workers;
     private JSONParser parser;
     private boolean terminate;
-    private boolean[] terminateMessages;
 
     public static void main(String[] args){
 
@@ -55,9 +53,8 @@ public class Manager {
         workers = new ArrayList<>();
         parser = new JSONParser();
         terminate = false;
-        terminateMessages = null;
 
-        System.out.println("Created manager successfully");
+        System.out.println("Created manager successfully.");
     }
 
     public void runManager(){
@@ -65,43 +62,36 @@ public class Manager {
             System.out.println("Listener thread created");
             while (true) {
                 readMessageFromWorkers();
-
-                if(terminate && jobs.isEmpty()) tearDown();
+                if(terminate && jobs.isEmpty()){
+                    System.out.println("All jobs are done, starting tear down process");
+                    tearDown();
+                    break;
+                }
             }
-
-
         }).start();
 
         while(true){
             System.out.println("Listening to local apps");
 
-            Job job = readMessageFromLocalApps();
+            List<Job> newJobs = readMessageFromLocalApps();
 
-            jobs.put(job.getBucketKey(), job);
-
-            if(job.getWorkersN() > workers.size()){
+            if(newJobs.get(0).getWorkersN() > workers.size()){
                 System.out.println("Adding new Workers");
-                createKWorkers(job.getWorkersN() - workers.size());
+                createKWorkers(newJobs.get(0).getWorkersN() - workers.size());
             }
 
-            sendTasksToWorkers(job);
+            for(Job job : newJobs) {
+                jobs.put(job.getBucketKey(), job);
+                sendTasksToWorkers(job);
+            }
 
-            if(job.isTerminate())
-            {
-                if(terminateMessages == null)
-                {
-                    terminateMessages = new boolean[job.getNumJobs()];
-                    Arrays.fill(terminateMessages,false);
-                }
-                terminateMessages[job.getJobIndex()] = true;
-                if(shouldBreak())
-                {
-                    break;
-                }
+            // If terminate should happen, it's updated in method readMessageFromLocalApps.
+            if(terminate) {
+                System.out.println("Starting termination process");
+                break;
             }
         }
     }
-
 
     private String createQueue(String queueName){
         CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
@@ -117,8 +107,8 @@ public class Manager {
     }
 
     // Message format: <bucket> <key> <manager2local sqs URL> <n>
-    private Job readMessageFromLocalApps(){
-        Job output = null;
+    private List<Job> readMessageFromLocalApps(){
+        List<Job> output = null;
 
         try{
             ReceiveMessageRequest receiveMessageRequest = ReceiveMessageRequest.builder()
@@ -134,8 +124,9 @@ public class Manager {
             System.out.println("Received a message from a local app:");
             System.out.println(messages.get(0).body());
 
+            output = Job.getJobs(messages.get(0).body(), s3);
 
-            output = new Job(messages.get(0).body() , s3);
+            if(output.get(0).isTerminate()) terminate = true;
 
             DeleteMessageRequest deleteMessageRequest = DeleteMessageRequest.builder()
                     .queueUrl(local2manager)
@@ -170,8 +161,8 @@ public class Manager {
 
             sqs.deleteMessage(deleteMessageRequest);
 
-            System.out.println("Received message from workers:");
-            System.out.println(msg.toJSONString() +"\n");
+//            System.out.println("Received message from workers:");
+//            System.out.println(msg.toJSONString() +"\n");
 
             Job job = jobs.get(msg.get("bucketKey").toString());
             int index = Integer.parseInt(msg.get("index").toString());
@@ -278,7 +269,7 @@ public class Manager {
                     .messageBody(json.toJSONString())
                     .build());
 
-            System.out.println("Sent a new message to workers:\n" +json.toJSONString() +"\n");
+//            System.out.println("Sent a new message to workers:\n" +json.toJSONString() +"\n");
         }
     }
 
@@ -325,7 +316,6 @@ public class Manager {
 
             RunInstancesResponse response = ec2.runInstances(runRequest);
 
-            // TODO: delete
             System.out.println("Created " +workersToCreate +" workers.");
 
             for (Instance instance : response.instances()) {
@@ -350,14 +340,6 @@ public class Manager {
         }
     }
 
-    private boolean shouldBreak() {
-        for (boolean b:terminateMessages) {
-            if(!b)
-                return false;
-        }
-        return true;
-    }
-
     private void tearDown(){
         deleteQueue("local2manager");
         deleteQueue("workers2manager");
@@ -371,6 +353,8 @@ public class Manager {
                     .build();
 
             ec2.terminateInstances(terminateRequest);
+
+            System.out.println("Terminated all workers");
         }
     }
 

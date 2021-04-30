@@ -41,8 +41,6 @@ public class Review {
     }
 
     public void setResult(List<String> entities, int sentiment) {
-        // TODO: delete
-        System.out.println("Adding result to review: " + Arrays.toString(entities.toArray()));
 
         this.entities.addAll(entities);
         this.sentiment = sentiment;

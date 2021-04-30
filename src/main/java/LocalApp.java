@@ -217,7 +217,14 @@ public class LocalApp {
         return output;
     }
 
-    // Message format: <bucket> <key> <manager2local> <n> <terminate> <number of Jobs> <job index in list>
+    /*
+    Message format:
+        * bucket  - bucket name
+        * manager2local - the URL of the incoming messages queue
+        * n - number of maximal tasks per worker
+        * terminate - boolean that states whether to terminate Manager after this job
+        * keys - array of input file keys in S3
+    */
     private void sendURLMessages2Manager(){
         try {
             ListObjectsRequest listObjects = ListObjectsRequest
@@ -227,29 +234,27 @@ public class LocalApp {
 
             ListObjectsResponse res = s3.listObjects(listObjects);
             List<S3Object> objects = res.contents();
+            JSONObject mainJson = new JSONObject();
+            JSONArray keys = new JSONArray();
+
+            mainJson.put("bucket",bucketName);
+            mainJson.put("manager2local", manager2localURL);
+            mainJson.put("n", n);
+            mainJson.put("terminate", (terminate ? "true" : "false"));
 
             for (int i=0; i<objects.size();i++) {
                 S3Object myValue = objects.get(i);
-                JSONObject json = new JSONObject();
-                json.put("bucket",bucketName);
-                json.put("key", myValue.key());
-                json.put("manager2local", manager2localURL);
-                json.put("n", n);
-                json.put("terminate", terminate);
-                json.put("numJobs", objects.size());
-                json.put("jobIndex", i);
-
-                sqs.sendMessage(SendMessageRequest.builder()
-                        .queueUrl(local2managerURL)
-                        .messageBody(json.toJSONString())
-                        .build());
+                keys.add(myValue.key());
             }
 
-//            if(terminate)
-//                sqs.sendMessage(SendMessageRequest.builder()
-//                        .queueUrl(local2managerURL)
-//                        .messageBody("terminate")
-//                        .build());
+            mainJson.put("keys", keys);
+
+            System.out.println("Sending message to manager:\n" +mainJson.toJSONString());
+
+            sqs.sendMessage(SendMessageRequest.builder()
+                    .queueUrl(local2managerURL)
+                    .messageBody(mainJson.toJSONString())
+                    .build());
 
         } catch (S3Exception e) {
             System.err.println(e.awsErrorDetails().errorMessage());
@@ -385,11 +390,16 @@ public class LocalApp {
     }
 
     private void tearDown(){
-        if(terminate)
+        if(terminate) {
             deleteManager();
+            System.out.println("Manager Deleted successfully");
+        }
 
         deleteBucket();
+        System.out.println("Bucket Deleted successfully");
+
         deleteQueue();
+        System.out.println("Queue Deleted successfully");
     }
 
     // Wait for OK termination message from the manager, and terminate Manager

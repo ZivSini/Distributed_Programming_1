@@ -89,6 +89,32 @@ public class Job {
         } catch (Exception ignored) {}
     }
 
+    public static List<Job> getJobs(String msg, S3Client s3){
+        JSONObject jsonMsg = null;
+        List<Job> output = new ArrayList<>();
+
+        JSONParser parser = new JSONParser();
+        try {
+            jsonMsg = (JSONObject) parser.parse(msg);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+
+        System.out.println("Creating Job from msg:\n" +msg);
+
+        String bucket = jsonMsg.get("bucket").toString();
+        String manager2local = jsonMsg.get("manager2local").toString();
+        int n = Integer.parseInt(jsonMsg.get("n").toString());
+        boolean terminate = jsonMsg.get("terminate").toString().equals("true");
+
+        JSONArray keys = (JSONArray) jsonMsg.get("keys");
+
+        for(Object key : keys)
+            output.add(new Job(bucket, manager2local, n, terminate, key.toString(), s3));
+
+        return output;
+    }
+
     /*
     Updates the ith review with the result.
     Returns true iff the job is now done.
