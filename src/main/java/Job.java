@@ -30,36 +30,29 @@ public class Job {
     Constructor. Takes the msg from the local app, and parses it.
     Message format: <bucket> <key> <manager2local> <n>
      */
-    public Job(String msg, S3Client s3){
+    public Job(String bucketName, String manager2local, int n, boolean terminate, String objectKey, S3Client s3 ){
 
-        JSONObject jsonMsg = null;
+//        JSONObject jsonMsg = null;
+//
+//        this.parser = new JSONParser();
+//        try {
+//            jsonMsg = (JSONObject) parser.parse(msg);
+//        } catch (ParseException e) {
+//            e.printStackTrace();
+//        }
 
-        this.parser = new JSONParser();
-        try {
-            jsonMsg = (JSONObject) parser.parse(msg);
-        } catch (ParseException e) {
-            e.printStackTrace();
-        }
-
-        this.bucketName = jsonMsg.get("bucket").toString();
-        this.objectKey = jsonMsg.get("key").toString();
-        this.manager2local = jsonMsg.get("manager2local").toString();
-        this.n = Integer.parseInt(jsonMsg.get("n").toString());
-        this.terminate = Boolean.getBoolean(jsonMsg.get("n").toString());
-        this.numJobs = Integer.parseInt(jsonMsg.get("numJobs").toString());
-        this.jobIndex = Integer.parseInt(jsonMsg.get("jobIndex").toString());
+        this.bucketName = bucketName;
+        this.objectKey = objectKey;
+        this.manager2local = manager2local;
+        this.n = n;
+        this.terminate = terminate;
 
         System.out.println("Job created!");
         System.out.println("bucketName: " + bucketName);
-        System.out.println("objectKey: " + objectKey);
+        System.out.println("objectKeys: " + objectKey);
         System.out.println("manager2local: " + manager2local);
         System.out.println("n: " + n);
         System.out.println("terminate: " + terminate);
-        System.out.println("numJobs: " + numJobs);
-        System.out.println("jobIndex: " + jobIndex);
-
-
-
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucketName)
