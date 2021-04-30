@@ -1,4 +1,3 @@
-//import edu.stanford.nlp.neural.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.util.Pair;
 import org.json.simple.parser.JSONParser;
@@ -42,8 +41,6 @@ public class Worker {
     private StanfordCoreNLP sentimentNERPipeline;
     private JSONParser parser;
 
-//    private SentimentAnalysisHandler sentimentAnalysisHandler;
-//    private namedEntityRecognitionHandler namedEntityRecognitionHandler;
 
     public static void main(String[] args) {
         System.out.println("Started Worker main");
@@ -93,12 +90,11 @@ public class Worker {
         entitiesProps = new Properties();
         entitiesProps.put("annotators", "tokenize, ssplit, pos, lemma, ner");
 
-        // TODO: fix bug
-//        sentimentProps = new Properties();
-//        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
+        sentimentProps = new Properties();
+        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
 
         entitiesNERPipeline = new StanfordCoreNLP(entitiesProps);
-//        sentimentNERPipeline = new StanfordCoreNLP(sentimentProps);
+        sentimentNERPipeline = new StanfordCoreNLP(sentimentProps);
     }
 
     private String getQueue(String prefix){
@@ -155,24 +151,22 @@ public class Worker {
     }
 
     private int findSentiment(String review) {
-//        int mainSentiment = 0;
-//        if (review!= null && review.length() > 0) {
-//            int longest = 0;
-//            Annotation annotation = sentimentNERPipeline.process(review);
-//            for (CoreMap sentence : annotation
-//                    .get(CoreAnnotations.SentencesAnnotation.class)) {
-//                Tree tree = sentence.get(
-//                        SentimentCoreAnnotations.AnnotatedTree.class);
-//                int sentiment = RNNCoreAnnotations.getPredictedClass(tree);
-//                String partText = sentence.toString();
-//                if (partText.length() > longest) {
-//                    mainSentiment = sentiment;longest = partText.length();
-//                }
-//            }
-//        }
-//        return mainSentiment;
-        // TODO: fix bug
-        return 3;
+        int mainSentiment = 0;
+        if (review!= null && review.length() > 0) {
+            int longest = 0;
+            Annotation annotation = sentimentNERPipeline.process(review);
+            for (CoreMap sentence : annotation
+                    .get(CoreAnnotations.SentencesAnnotation.class)) {
+                Tree tree = sentence.get(
+                        SentimentCoreAnnotations.AnnotatedTree.class);
+                int sentiment = RNNCoreAnnotations.getPredictedClass(tree);
+                String partText = sentence.toString();
+                if (partText.length() > longest) {
+                    mainSentiment = sentiment;longest = partText.length();
+                }
+            }
+        }
+        return mainSentiment;
     }
 
     private List<String> findEntities(String review){

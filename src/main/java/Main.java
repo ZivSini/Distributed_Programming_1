@@ -1,3 +1,10 @@
+import edu.stanford.nlp.ling.CoreAnnotations;
+import edu.stanford.nlp.pipeline.Annotation;
+import edu.stanford.nlp.pipeline.StanfordCoreNLP;
+import edu.stanford.nlp.rnn.RNNCoreAnnotations;
+import edu.stanford.nlp.sentiment.SentimentCoreAnnotations;
+import edu.stanford.nlp.trees.Tree;
+import edu.stanford.nlp.util.CoreMap;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -16,26 +23,50 @@ import java.sql.SQLSyntaxErrorException;
 import java.util.*;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args){
 
-        // TODO: delete
         teardown();
+//        List<String> inputFiles = new LinkedList<>();
+//        List<String> outputFiles = new LinkedList<>();
+//
+//        boolean terminate = args[args.length -1].equals("-t");
+//        int off = (terminate ? 1 : 0);
+//        int numOfFiles = (args.length -1 -off) /2;
+//        int n = Integer.parseInt(args[args.length -1 -off]);
+//
+//        for(int i=0 ; i<numOfFiles ; i++){
+//            inputFiles.add(args[i]);
+//            outputFiles.add(args[numOfFiles +i]);
+//        }
+//
+//        LocalApp app = new LocalApp(inputFiles, outputFiles, n, terminate);
+//        app.runApp();
+    }
 
-        List<String> inputFiles = new LinkedList<>();
-        List<String> outputFiles = new LinkedList<>();
+//    TODO: delete
+    public static int findSentiment(String review) {
 
-        boolean terminate = args[args.length -1].equals("-t");
-        int off = (terminate ? 1 : 0);
-        int numOfFiles = (args.length -1 -off) /2;
-        int n = Integer.parseInt(args[args.length -1 -off]);
+        Properties sentimentProps = new Properties();
+        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
 
-        for(int i=0 ; i<numOfFiles ; i++){
-            inputFiles.add(args[i]);
-            outputFiles.add(args[numOfFiles +i]);
+        StanfordCoreNLP sentimentNERPipeline = new StanfordCoreNLP(sentimentProps);
+
+        int mainSentiment = 0;
+        if (review!= null && review.length() > 0) {
+            int longest = 0;
+            Annotation annotation = sentimentNERPipeline.process(review);
+            for (CoreMap sentence : annotation
+                    .get(CoreAnnotations.SentencesAnnotation.class)) {
+                Tree tree = sentence.get(
+                        SentimentCoreAnnotations.AnnotatedTree.class);
+                int sentiment = RNNCoreAnnotations.getPredictedClass(tree);
+                String partText = sentence.toString();
+                if (partText.length() > longest) {
+                    mainSentiment = sentiment;longest = partText.length();
+                }
+            }
         }
-
-        LocalApp app = new LocalApp(inputFiles, outputFiles, n, terminate);
-        app.runApp();
+        return mainSentiment;
     }
 
 

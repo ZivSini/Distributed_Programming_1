@@ -177,7 +177,7 @@ public class Manager {
             job.addResult(entities, sentiment, index);
 
             if(job.isDone()) {
-                System.out.println("Job is Done!\n");
+                System.out.println("Job is Done!");
                 summarizeAndSend2Local(job);
             }
 
@@ -309,7 +309,7 @@ public class Manager {
                     .iamInstanceProfile(IamInstanceProfileSpecification.builder().name("yz-role").build())
                     .keyName("yonatan_ziv_key")
                     .securityGroupIds("sg-07199d1ea166ce7fd")
-                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
+//                    .userData(Base64.getEncoder().encodeToString(base64UserData.getBytes()))
                     .build();
 
             RunInstancesResponse response = ec2.runInstances(runRequest);

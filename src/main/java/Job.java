@@ -161,7 +161,7 @@ public class Job {
 
     public int getWorkersN(){
         System.out.println("reviews.size() = " +reviews.size() +", n = " +n);
-        return reviews.size() / n;
+        return Math.max(reviews.size() / n, 1);
     }
 
     public String getBucketKey(){
