@@ -43,31 +43,7 @@ public class Main {
 //        app.runApp();
     }
 
-//    TODO: delete
-    public static int findSentiment(String review) {
 
-        Properties sentimentProps = new Properties();
-        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
-
-        StanfordCoreNLP sentimentNERPipeline = new StanfordCoreNLP(sentimentProps);
-
-        int mainSentiment = 0;
-        if (review!= null && review.length() > 0) {
-            int longest = 0;
-            Annotation annotation = sentimentNERPipeline.process(review);
-            for (CoreMap sentence : annotation
-                    .get(CoreAnnotations.SentencesAnnotation.class)) {
-                Tree tree = sentence.get(
-                        SentimentCoreAnnotations.AnnotatedTree.class);
-                int sentiment = RNNCoreAnnotations.getPredictedClass(tree);
-                String partText = sentence.toString();
-                if (partText.length() > longest) {
-                    mainSentiment = sentiment;longest = partText.length();
-                }
-            }
-        }
-        return mainSentiment;
-    }
 
 
     public static void teardown()
